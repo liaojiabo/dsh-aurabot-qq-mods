@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import mod from '../index.mjs'
 
-function fakeApi({ owner = '10001', askImpl, settingsOverrides = {}, withRefs = true } = {}) {
+function fakeApi({ owner = '10001', askImpl, thinkImpl, settingsOverrides = {}, withRefs = true } = {}) {
   const settingsMap = { ...mod.defaults, ...settingsOverrides }
   const handlers = {}
   const routes = {}
@@ -31,6 +31,7 @@ function fakeApi({ owner = '10001', askImpl, settingsOverrides = {}, withRefs = 
     on: (ev, fn) => { (handlers[ev] = handlers[ev] || []).push(fn) },
     later: () => {},
     ask: askImpl || (async () => { throw new Error('无模型') }),
+    think: thinkImpl || (async () => { throw new Error('无模型') }),
     has: () => false,
     use: () => null,
     core: {
@@ -190,18 +191,30 @@ test('非主人/群聊/system：不跑军师链但仍注入时间+模式基调',
   assert.equal(sysCtx, '')
 })
 
-test('保险丝: 剥 HTML 标签 / DSML 残片 / ACP 标签，保留 aurabot 占位符', () => {
+test('保险丝: 剥 HTML 标签 / DSML 残片 / ACP 标签，保留 aurabot 占位符', async () => {
   const api = fakeApi()
   mod.setup(api)
   const replyHandlers = api.__test.handlers.reply
-  const fuse = (t) => { let cur = t; for (const h of replyHandlers) { const r = h(cur); if (r === null) return null; if (typeof r === 'string') cur = r } return cur }
-  assert.equal(fuse('<p>我想你了</p>'), '我想你了')
-  assert.equal(fuse('好啊<br>晚上见'), '好啊晚上见')
-  assert.equal(fuse('我都不好意思了</｜｜DSML｜｜ parameter>{" type="string"'), '我都不好意思了')
-  assert.equal(fuse('<acp tokens="15" type="text">m01990 刚吃完饭'), '刚吃完饭')
-  assert.equal(fuse('刚吃完饭 [sticker]'), '刚吃完饭 [sticker]') // 占位符不动
-  assert.equal(fuse('❌ [ACP] stream error: broken'), null) // 整条是错误行 → 拦下
-  assert.equal(fuse('正常的一句话'), '正常的一句话')
+  const fuse = async (t) => { let cur = t; for (const h of replyHandlers) { const r = await h(cur, { chatId: 'private:10001', userText: '刚才的话' }); if (r === null) return null; if (typeof r === 'string') cur = r } return cur }
+  assert.equal(await fuse('<p>我想你了</p>'), '我想你了')
+  assert.equal(await fuse('好啊<br>晚上见'), '好啊晚上见')
+  assert.equal(await fuse('我都不好意思了</｜｜DSML｜｜ parameter>{" type="string"'), '我都不好意思了')
+  assert.equal(await fuse('<acp tokens="15" type="text">m01990 刚吃完饭'), '刚吃完饭')
+  assert.equal(await fuse('刚吃完饭 [sticker]'), '刚吃完饭 [sticker]') // 占位符不动
+  assert.equal(await fuse('正常的一句话'), '正常的一句话')
+  // 整条是代理错误行 → 不再沉默拦下：think 不可用时报一句自然的补救
+  assert.equal(await fuse('❌ [ACP] stream error: broken'), '……我刚刚卡了一下，你刚说啥来着？')
+})
+
+test('保险丝补救: think 可用时按人格重新生成回复；重新生成的脏文本再走一遍清洗', async () => {
+  const fuseOf = (api) => async (t) => { let cur = t; for (const h of api.__test.handlers.reply) { const r = await h(cur, { chatId: 'private:10001', userText: '在吗' }); if (r === null) return null; if (typeof r === 'string') cur = r } return cur }
+  const api = fakeApi({ thinkImpl: async () => '刚卡了一下——我重新说：好听，你品味不错' })
+  mod.setup(api)
+  assert.equal(await fuseOf(api)('❌ [ACP] stream error: the turn degenerated'), '刚卡了一下——我重新说：好听，你品味不错')
+  // think 又吐了脏文本 → 清洗后再发
+  const api2 = fakeApi({ thinkImpl: async () => '嗯嗯我在听</｜｜DSML｜｜ parameter>{" type="x"' })
+  mod.setup(api2)
+  assert.equal(await fuseOf(api2)('❌ [ACP] stream error'), '嗯嗯我在听')
 })
 
 test('自动匹配: 有效 JSON 写入模式+双画像并套默认滑块；无效则报错保持现状', async () => {

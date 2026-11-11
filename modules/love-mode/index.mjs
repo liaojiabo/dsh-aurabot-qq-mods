@@ -474,11 +474,10 @@ export default {
       return cleaned === text ? undefined : cleaned
     })
 
-    // 协议碎片保险丝 v3：核心层（chat/reply.js）会先剥完整配对的协议标签，
+    // 协议碎片保险丝 v3 + 失败补救：核心层（chat/reply.js）会先剥完整配对的协议标签，
     // 但截断泄漏会留下残片：① DSML 工具标签 ② 残留 JSON 负载 ③ ACP 元数据标签 ④ [ACP] 错误行
-    api.on('reply', (text) => {
-      if (typeof text !== 'string') return
-      let cleaned = text
+    const scrubReply = (raw) => {
+      let cleaned = String(raw ?? '')
       // ACP 元数据标签泄漏：上下文代理给每条消息注入 <acp ...>mNNNNN</acp>，模型偶发当文本模仿输出
       if (cleaned.includes('<acp') || cleaned.includes('</acp>')) {
         cleaned = cleaned
@@ -486,9 +485,7 @@ export default {
           .replace(/<\/?acp\b[^>]*>/g, '')
       }
       // [ACP] 代理错误行（如 "❌ [ACP] stream error: ..."）：剥到行尾或下一个 [ 标记（保住 [sticker] 等占位符）
-      if (cleaned.includes('[ACP]')) {
-        cleaned = cleaned.replace(/❌?\s*\[ACP\][^\n[]*/g, '')
-      }
+      if (cleaned.includes('[ACP]')) cleaned = cleaned.replace(/❌?\s*\[ACP\][^\n[]*/g, '')
       // 成对出现：两个 DSML 标签连同中间内容一起剥；孤立标签只剥标签
       if (cleaned.includes('DSML')) {
         cleaned = cleaned
@@ -501,10 +498,28 @@ export default {
         const tail = cleaned.slice(ji)
         if (/":\s*"?/.test(tail) || !/[一-鿿]/.test(tail)) cleaned = cleaned.slice(0, ji)
       }
-      cleaned = cleaned.replace(/[ \t]{2,}/g, ' ').trim()
+      return cleaned.replace(/[ \t]{2,}/g, ' ').trim()
+    }
+    api.on('reply', async (text, { chatId, userText } = {}) => {
+      if (typeof text !== 'string') return
+      const cleaned = scrubReply(text)
       if (cleaned === text.trim()) return undefined
-      if (!cleaned) { api.log.warn(`保险丝拦下整条回复（全是协议碎片），原文：${String(text).slice(0, 300)}`); return null } // 整条都是泄漏碎片，别发
-      return cleaned
+      if (cleaned) return cleaned
+      // 整条都是泄漏碎片（多为代理流式失败）——别让她沉默：先按人格重新想一条，实在不行发一句自然的补救
+      api.log.warn(`保险丝拦下整条回复（全是协议碎片），原文：${String(text).slice(0, 300)}`)
+      const who = chatId?.startsWith('group:') ? '群友' : '他'
+      const ask = String(userText || '').slice(0, 200)
+      try {
+        const regen = await api.think(
+          `你刚刚想回复${who}的时候脑子卡了一下，话没说出来。${ask ? `${who}刚说的是：「${ask}」。` : ''}现在用你平时的语气把回复补上，自然一点，一两句话就好。`,
+          { title: '补救一条回复', timeoutMs: 30000 }
+        )
+        const regenClean = scrubReply(regen)
+        if (regenClean) { api.log.info('补救成功：已重新生成回复'); return regenClean }
+      } catch (e) {
+        api.log.warn('补救回复失败：' + e.message)
+      }
+      return '……我刚刚卡了一下，你刚说啥来着？'
     })
 
     api.log.info(`love-mode v${VERSION} 已启动（当前模式：${getMode().name}）`)
