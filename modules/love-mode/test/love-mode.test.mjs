@@ -200,6 +200,9 @@ test('保险丝: 剥 HTML 标签 / DSML 残片 / ACP 标签，保留 aurabot 占
   assert.equal(await fuse('好啊<br>晚上见'), '好啊晚上见')
   assert.equal(await fuse('我都不好意思了</｜｜DSML｜｜ parameter>{" type="string"'), '我都不好意思了')
   assert.equal(await fuse('<acp tokens="15" type="text">m01990 刚吃完饭'), '刚吃完饭')
+  // ACP 标签残片（复读防护只删前半截留下的尾巴，11-13 真实案例）
+  assert.equal(await fuse('text" time="2026-11-13 14:04:40">m02482 哈哈行吧，兰州拉面也行'), '哈哈行吧，兰州拉面也行')
+  assert.equal(await fuse('" type="text" time="2026-11-13 14:08:58">m02495 哈哈哈这只熊我喜欢'), '哈哈哈这只熊我喜欢')
   assert.equal(await fuse('刚吃完饭 [sticker]'), '刚吃完饭 [sticker]') // 占位符不动
   assert.equal(await fuse('正常的一句话'), '正常的一句话')
   // 整条是代理错误行 → 不再沉默拦下：think 不可用时报一句自然的补救

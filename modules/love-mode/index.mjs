@@ -484,6 +484,8 @@ export default {
           .replace(/<acp\b[^>]*>\s*m\d{4,6}\s*(<\/acp>)?/g, '')
           .replace(/<\/?acp\b[^>]*>/g, '')
       }
+      // ACP 标签残片：核心的复读防护偶尔只删掉标签前半截，留下 text" time="...">mNNNNN 这种尾巴
+      cleaned = cleaned.replace(/\w*"?\s*(?:[\w-]+="[\w-]+"\s*)*time="\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}"[^>]*>\s*m\d{4,6}\s*/g, '')
       // [ACP] 代理错误行（如 "❌ [ACP] stream error: ..."）：剥到行尾或下一个 [ 标记（保住 [sticker] 等占位符）
       if (cleaned.includes('[ACP]')) cleaned = cleaned.replace(/❌?\s*\[ACP\][^\n[]*/g, '')
       // 成对出现：两个 DSML 标签连同中间内容一起剥；孤立标签只剥标签
